@@ -1,0 +1,7 @@
+build/
+.gradle/
+native/build/
+resources/windows-x64/noamp.dll
+*.pem
+local.properties
+.idea/
