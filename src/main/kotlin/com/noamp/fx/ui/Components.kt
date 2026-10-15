@@ -22,7 +22,6 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.input.key.isShiftPressed
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -59,7 +58,7 @@ fun Knob(d: PDef, value: Float, color: Color, onChange: (Float) -> Unit, size: D
                 .onPointerEvent(PointerEventType.Scroll) { ev ->
                     val dy = ev.changes.firstOrNull()?.scrollDelta?.y ?: 0f
                     if (dy != 0f) {
-                        val step = if (ev.keyboardModifiers.isShiftPressed) 0.01f else 0.04f
+                        val step = if ((ev.nativeEvent as? java.awt.event.InputEvent)?.isShiftDown == true) 0.01f else 0.04f
                         cb(d.fromNorm((d.toNorm(v) - dy * step).coerceIn(0f, 1f)))
                         ev.changes.forEach { it.consume() }
                     }
