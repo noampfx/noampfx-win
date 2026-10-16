@@ -22,6 +22,17 @@ Port Windows dari proyek Android **NoAmpFX v2.4**. Mesin DSP (gate, comp, pitch,
 ## Fitur Android yang tidak ada di versi Windows
 Rekam video / kamera / layar, "Full Record" (menangkap audio aplikasi lain), mic HP sebagai Input 2 (Input 2 = kanal 2 interface), umpan balik getar, pemindaian Bluetooth MIDI dari dalam aplikasi (pair lewat Pengaturan Windows), decode OGG/M4A/AAC.
 
+## ASIO dan VST3 (opsional, butuh SDK Steinberg)
+Settings → **Audio**: pilih **Windows audio (WASAPI)** atau **ASIO**. Mode ASIO menampilkan daftar driver ASIO terpasang, kanal input (gitar) dan pasangan output, **sample rate** (44.1 – 192 kHz sesuai kemampuan driver), **buffer size** (dalam sample + ms) dan tombol **Driver panel**. Pilihan device WASAPI sekarang diingat antar sesi.
+Settings → **VST3**: satu slot plug-in efek (stereo). Posisi **sesudah chain** (reverb, EQ, mastering) atau **sebelum chain** (amp sim / gate, diproses mono). Ada daftar plug-in terpasang (`C:\Program Files\Common Files\VST3` + folder tambahan), tombol editor, on/off, dan state plug-in disimpan otomatis.
+
+SDK tidak saya sertakan (lisensi Steinberg):
+1. **VST3**: workflow GitHub Actions mengunduhnya otomatis dari repo publik `steinbergmedia/vst3sdk`. Secara lokal: `git clone --recurse-submodules https://github.com/steinbergmedia/vst3sdk third_party/vst3sdk`. Periksa lisensinya untuk distribusi Anda.
+2. **ASIO**: unduh ASIO SDK dari Steinberg (perlu menerima lisensi mereka), salin ke `third_party/asiosdk` (harus ada `iasiodrv.h`, `asio.h`, `asiosys.h`). Jangan commit ke repo publik; pakai repo **private**. Aplikasi yang memakai ASIO wajib mencantumkan "ASIO is a trademark and software of Steinberg Media Technologies GmbH".
+3. Tanpa salah satu SDK, bagian itu otomatis dimatikan dan menu menampilkan penjelasan. Jika build dengan SDK gagal dikompilasi, workflow otomatis membangun ulang tanpa keduanya supaya Anda tetap mendapat aplikasi yang jalan; lihat peringatan kuning di log.
+
+Batasan: VST3 hanya efek 64-bit mono/stereo (bukan instrumen), tanpa MIDI/sidechain, satu slot, tersimpan per aplikasi (bukan per preset). ASIO: driver dibuka/ditutup lewat thread COM khusus; driver 32-bit tidak terlihat.
+
 ## Cara build
 
 ### A. GitHub Actions (paling mudah)
@@ -29,7 +40,7 @@ Push folder ini ke repo GitHub → tab **Actions → Build Windows (NoAmp FX)**.
 `NoAmpFX-portable` (zip, jalankan `NoAmpFX\NoAmpFX.exe`), `NoAmpFX-installer` (.exe installer), `noamp-dll`.
 
 ### B. Lokal (Windows)
-Butuh: JDK 17, CMake ≥ 3.22, MinGW-w64 (GCC ≥ 11), Gradle 8.9, internet (mengunduh NAM core + miniaudio saat konfigurasi pertama).
+Butuh: JDK 17, CMake ≥ 3.22, MinGW-w64 (GCC ≥ 11), Gradle 8.9, (opsional) SDK di `third_party/`, internet (mengunduh NAM core + miniaudio saat konfigurasi pertama).
 ```powershell
 cmake -S native -B native/build -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build native/build -j 4
@@ -46,5 +57,6 @@ Lisensi terikat per PC: Device ID Windows diturunkan dari `MachineGuid`, jadi ID
 
 ## Catatan jujur
 - Kode ini **belum pernah dikompilasi/dijalankan di Windows** (lingkungan tempat saya mengerjakannya tanpa internet, Windows, atau Gradle). Yang sudah diperiksa: C++ engine lolos pengecekan tipe dengan stub miniaudio/NAM, dan keseimbangan kurung semua file Kotlin. Build pertama di Actions kemungkinan masih menampilkan beberapa error kecil (import / nama API) — kirim lognya, mudah diperbaiki.
-- ASIO tidak didukung (WASAPI saja). Untuk latensi terendah pilih mode **Ultra** (exclusive) dan interface dengan driver WASAPI yang baik.
+- Kode ASIO dan VST3 adalah bagian yang **paling belum teruji** (butuh SDK + perangkat nyata). Tanpa SDK keduanya tidak ikut dikompilasi.
+- Untuk latensi terendah: ASIO dengan buffer 64–128 sample, atau WASAPI mode **Ultra** (exclusive).
 - Angka "XRUN" kini berarti callback audio melebihi waktunya (indikasi dropout), bukan hitungan driver.

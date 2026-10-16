@@ -75,3 +75,32 @@ JF(jint, nativeRecRead)(JNIEnv* env, jobject, jint kind, jfloatArray arr) {
     int r = Engine::get().recRead(kind, d, n); env->ReleaseFloatArrayElements(arr, d, 0); return r;
 }
 JF(jint, nativeRecDropped)(JNIEnv*, jobject) { return Engine::get().recDropped(); }
+
+// ---------------------------------------------------------------- ASIO + VST3
+#include "plugin_host.h"
+static jobjectArray toJArray(JNIEnv* env, const std::vector<std::string>& v) {
+    jclass sc = env->FindClass("java/lang/String");
+    jobjectArray arr = env->NewObjectArray((jsize)v.size(), sc, nullptr);
+    for (size_t i = 0; i < v.size(); i++) env->SetObjectArrayElement(arr, (jsize)i, env->NewStringUTF(v[i].c_str()));
+    return arr;
+}
+JF(jboolean, nativeAsioCompiled)(JNIEnv*, jobject) { return Engine::asioCompiled(); }
+JF(jobjectArray, nativeAsioDrivers)(JNIEnv* env, jobject) { return toJArray(env, Engine::get().asioDrivers()); }
+JF(jstring, nativeAsioProbe)(JNIEnv* env, jobject, jint drv) { return env->NewStringUTF(Engine::get().asioProbe(drv).c_str()); }
+JF(jboolean, nativeStartAsio)(JNIEnv*, jobject, jint drv, jint sr, jint buf, jint inCh, jint outCh) { return Engine::get().startAsio(drv, sr, buf, inCh, outCh); }
+JF(void, nativeAsioControlPanel)(JNIEnv*, jobject) { Engine::get().asioControlPanel(); }
+
+JF(jboolean, nativeVstCompiled)(JNIEnv*, jobject) { return PluginHost::compiled(); }
+JF(jobjectArray, nativeVstScan)(JNIEnv* env, jobject, jstring extra) { return toJArray(env, PluginHost::get().scan(jstr(env, extra))); }
+JF(jstring, nativeVstLoad)(JNIEnv* env, jobject, jstring path) { return env->NewStringUTF(PluginHost::get().load(jstr(env, path)).c_str()); }
+JF(void, nativeVstUnload)(JNIEnv*, jobject) { PluginHost::get().unload(); }
+JF(jstring, nativeVstName)(JNIEnv* env, jobject) { return env->NewStringUTF(PluginHost::get().name().c_str()); }
+JF(jint, nativeVstLatency)(JNIEnv*, jobject) { return PluginHost::get().latencySamples(); }
+JF(void, nativeVstSetOn)(JNIEnv*, jobject, jboolean on) { PluginHost::get().setOn(on); }
+JF(void, nativeVstSetPosition)(JNIEnv*, jobject, jint pos) { PluginHost::get().setPosition(pos); }
+JF(jboolean, nativeVstOpenEditor)(JNIEnv*, jobject) { return PluginHost::get().openEditor(); }
+JF(void, nativeVstCloseEditor)(JNIEnv*, jobject) { PluginHost::get().closeEditor(); }
+JF(jboolean, nativeVstEditorOpen)(JNIEnv*, jobject) { return PluginHost::get().editorOpen(); }
+JF(jstring, nativeVstGetState)(JNIEnv* env, jobject) { return env->NewStringUTF(PluginHost::get().getState().c_str()); }
+JF(jboolean, nativeVstSetState)(JNIEnv* env, jobject, jstring st) { return PluginHost::get().setState(jstr(env, st)); }
+JF(jboolean, nativeVstTakeDirty)(JNIEnv*, jobject) { return PluginHost::get().takeDirty(); }

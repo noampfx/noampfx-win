@@ -1,4 +1,5 @@
 #include "engine.h"
+#include "plugin_host.h"
 #define MA_NO_ENCODING
 #define MA_NO_GENERATION
 #define MA_NO_RESOURCE_MANAGER
@@ -164,14 +165,11 @@ static ma_device* openDuplex(Engine* self, int inId, int outId, int mode, float 
 bool Engine::start(int inId, int outId, int mode, float bufMs, int sampleRate, int micDev) {
     (void)micDev;
     std::lock_guard<std::mutex> lk(mtx);
-    if (sampleRate != 44100 && sampleRate != 48000) sampleRate = 48000;
-    lastIn = inId; lastOut = outId; lastMic = 0; lastMode = mode; lastSr = sampleRate; bufMsA.store(bufMs); xrunA.store(0.f);
+    if (sampleRate != 44100 && sampleRate != 48000 && sampleRate != 88200 && sampleRate != 96000) sampleRate = 48000;
+    lastBackend = 0; lastIn = inId; lastOut = outId; lastMic = 0; lastMode = mode; lastSr = sampleRate; bufMsA.store(bufMs); xrunA.store(0.f);
     { std::lock_guard<std::mutex> el(errMtx); err.clear(); }
     if (!ensureContext()) { std::lock_guard<std::mutex> el(errMtx); err = "audio system not available"; return false; }
-    stopping = true;
-    if (running) { running = false; }
-    if (dev) { ma_device_uninit(dev); delete dev; dev = nullptr; }
-    stopping = false;
+    closeDevicesLocked();
 
     // 1st try: requested mode (Ultra = exclusive WASAPI). 2nd try: shared mode. Input channels: 2 when the mic (channel 2) is on, else 1 (channel 1 of the interface).
     const int capCh = micWant.load() ? 2 : 1;
@@ -191,22 +189,30 @@ bool Engine::start(int inId, int outId, int mode, float bufMs, int sampleRate, i
     const float frames = (float)(dev->playback.internalPeriodSizeInFrames * dev->playback.internalPeriods + dev->capture.internalPeriodSizeInFrames * dev->capture.internalPeriods);
     latMs.store(frames * 1000.f / (float)sr);
     prepare((float)sr);
-    discard = 20;
+    PluginHost::get().prepare((double)sr, CHUNK);
+    backend = 0; discard = 20;
     running = true;
     if (ma_device_start(dev) != MA_SUCCESS) {
         running = false; ma_device_uninit(dev); delete dev; dev = nullptr;
         std::lock_guard<std::mutex> el(errMtx); err = "could not start audio device"; return false;
     }
-    if (!harmTh.joinable()) { harmRun = true; harmTh = std::thread([this] { harmLoop(); }); }
+    startHarmThread();
     return true;
 }
 
+void Engine::closeDevicesLocked() {
+    running = false; stopping = true;
+    asioStopDevice();
+    if (dev) { ma_device_uninit(dev); delete dev; dev = nullptr; }
+    stopping = false; backend = 0;
+}
+
+void Engine::startHarmThread() { if (!harmTh.joinable()) { harmRun = true; harmTh = std::thread([this] { harmLoop(); }); } }
+
 void Engine::stop() {
     std::lock_guard<std::mutex> lk(mtx);
-    running = false; stopping = true;
     harmRun = false; if (harmTh.joinable() && std::this_thread::get_id() != harmTh.get_id()) harmTh.join();
-    if (dev) { ma_device_uninit(dev); delete dev; dev = nullptr; }
-    stopping = false;
+    closeDevicesLocked();
     for (int i = 0; i < 3; i++) M[i].store(-120.f);
 }
 
@@ -216,7 +222,8 @@ void Engine::onDeviceStopped() {
     std::thread([this] {
         std::this_thread::sleep_for(std::chrono::milliseconds(300));
         if (stopping.load() || !running.load()) return;
-        if (!start(lastIn, lastOut, lastMode, bufMsA.load(), lastSr, 0)) running = false;
+        const bool ok = lastBackend == 1 ? startAsio(lastAsioDrv, lastSr, lastAsioBuf, lastAsioIn, lastAsioOut) : start(lastIn, lastOut, lastMode, bufMsA.load(), lastSr, 0);
+        if (!ok) running = false;
     }).detach();
 }
 
@@ -322,6 +329,8 @@ void Engine::processBlock(float* L, float* R, int n) {
     float pk = 0;
     ramp(x, mInPrev, faderLin(p(MASTER_IN)));
     for (int i = 0; i < n; i++) pk = std::max(pk, std::fabs(x[i]));
+    PluginHost::get().setTempo(metBpm.load(std::memory_order_relaxed));
+    PluginHost::get().processPre(x, n);                       // VST3 slot, position "before the chain" (mono in / mono out)
 
     // ---- housekeeping model NAM + IR cab (selalu dijalankan, apa pun urutan chain)
     if (namClearReq.exchange(false)) { delete namGarbage.exchange(namActive); namActive = nullptr; if (namOld) { delete namGarbage.exchange(namOld); namOld = nullptr; } }
@@ -466,6 +475,8 @@ void Engine::processBlock(float* L, float* R, int n) {
     if (!anaDone) tapAna();
     if (hasSide) { const float* sd = sideBuf.data(); for (int i = 0; i < n; i++) { L[i] = x[i] + sd[i]; R[i] = x[i] - sd[i]; } }
     else for (int i = 0; i < n; i++) { L[i] = x[i]; R[i] = x[i]; }
+
+    PluginHost::get().processPost(L, R, n);                   // VST3 slot, position "after the chain" (stereo)
 
     // ---- looper (stereo, setelah efek)
     loop.process(L, R, n, lpGain.load(std::memory_order_relaxed));

@@ -36,6 +36,14 @@ public:
     /** Lines "id|name" for every capture (input = true) or playback device. */
     std::vector<std::string> listDevices(bool input);
     std::string lastError() { std::lock_guard<std::mutex> lk(errMtx); return err; }
+    /** ASIO (Windows). Needs the Steinberg ASIO SDK at build time (CMake option NOAMP_ASIO), otherwise asioCompiled() is false. */
+    static bool asioCompiled();
+    std::vector<std::string> asioDrivers();                       // "index|driver name"
+    /** Opens the driver briefly and describes it: "OK|minBuf|maxBuf|prefBuf|granularity|latIn|latOut|rates(csv)|inputNames(tab)|outputNames(tab)" or "ERR|reason". */
+    std::string asioProbe(int driver);
+    /** firstIn / firstOut = index of the first input / output channel (guitar on firstIn, microphone on firstIn + 1, output pair firstOut, firstOut + 1). */
+    bool startAsio(int driver, int sampleRate, int bufFrames, int firstIn, int firstOut);
+    void asioControlPanel();
     void setBigCore(bool on) { (void)on; }
     /** Mic on input channel 2 mixed into the output (guitar stays on channel 1). Needs an engine restart to (re)open a 2-channel input. */
     void setMic(bool on, float db) { micWant.store(on); micLvl.store(faderLin(db)); }
@@ -81,7 +89,8 @@ public:
     double decodeFile(const std::string& path, int limitSec, bool keep);   // seconds decoded, < 0 on failure or cancel
     void setDecodeCancel(bool c) { decodeCancel.store(c); }
 
-    void onAudio(void* out, const void* in, uint32_t frames);               // called from the audio device thread
+    void onAudio(void* out, const void* in, uint32_t frames);
+    void asioStopDevice();                                                  // no-op when ASIO is not active / not compiled               // called from the audio device thread
     void onDeviceStopped();
 
 private:
@@ -101,6 +110,11 @@ private:
     std::mutex errMtx; std::string err; std::atomic<bool> decodeCancel{false};
     std::atomic<float> latMs{0.f}, xrunA{0.f}; std::atomic<bool> stopping{false};
     int devPeriod = 0;
+    std::atomic<int> backend{0};                                            // 0 = WASAPI (miniaudio), 1 = ASIO
+    int lastBackend = 0, lastAsioDrv = 0, lastAsioBuf = 0, lastAsioIn = 0, lastAsioOut = 0;
+    void closeDevicesLocked();                                              // mtx held
+    void startHarmThread();
+    friend struct AsioAccess;
     int inCh = 1, outCh = 2, lastIn = 0, lastOut = 0, lastMic = 0, discard = 0, lastMode = 0, lastSr = 48000;
     std::atomic<float> panP[3] = {{0.f}, {0.f}, {0.f}}; float panS[6] = {1.f, 1.f, 1.f, 1.f, 1.f, 1.f};
     std::atomic<bool> pitchLow{true}; bool pitchLowApplied = true;

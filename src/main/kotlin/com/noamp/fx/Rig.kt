@@ -32,6 +32,8 @@ data class Dev(val id: Int, val name: String, val usb: Boolean)
 
 const val IR_MAX_SAMPLES = 8192
 
+val SAMPLE_RATES = listOf(44100, 48000, 88200, 96000, 176400, 192000)
+
 class Rig(app: Application) {
     private val ctx: Context = app
     /** UI-lifetime scope (replaces the Android viewModelScope). */
@@ -64,13 +66,26 @@ class Rig(app: Application) {
 
     var running by mutableStateOf(false)
     var inDevs by mutableStateOf(listOf<Dev>()); var outDevs by mutableStateOf(listOf<Dev>())
-    var selIn by mutableIntStateOf(0); var selOut by mutableIntStateOf(0)
+    var selIn by mutableIntStateOf(sp.getInt("selIn", 0)); var selOut by mutableIntStateOf(sp.getInt("selOut", 0))
+    fun pickIn(id: Int) { selIn = id; sp.edit().putInt("selIn", id).apply(); restartIfRunning() }
+    fun pickOut(id: Int) { selOut = id; sp.edit().putInt("selOut", id).apply(); restartIfRunning() }
+
+    // ---------- audio backend: 0 = Windows audio (WASAPI), 1 = ASIO
+    var backend by mutableIntStateOf(sp.getInt("backend", 0))
+    val asioCompiled: Boolean = Engine.nativeAsioCompiled()
+    var asioDrivers by mutableStateOf(listOf<Dev>())          // id = position in the Windows ASIO registry
+    var asioDrv by mutableIntStateOf(0)
+    private var asioName: String = sp.getString("asioName", "") ?: ""
+    var asioInfo by mutableStateOf<AsioInfo?>(null)
+    var asioMsg by mutableStateOf("")                         // probe error / hint shown in Settings
+    var asioBuf by mutableIntStateOf(sp.getInt("asioBuf", 0)) // frames, 0 = driver default
+    var asioIn by mutableIntStateOf(sp.getInt("asioIn", 0)); var asioOut by mutableIntStateOf(sp.getInt("asioOut", 0))
     /** 0 Ultra (exclusive) · 1 Low (shared) · 2 Balanced · 3 Safe (power saving) */
     var latMode by mutableIntStateOf(sp.getInt("latMode", 0))
     /** Buffer dalam ms; 0 = Auto */
     var bufMs by mutableFloatStateOf(sp.getFloat("bufMs", 0f))
     /** 44100 atau 48000 */
-    var sampleRate by mutableIntStateOf(sp.getInt("sr", 48000).let { if (it == 44100) 44100 else 48000 })
+    var sampleRate by mutableIntStateOf(sp.getInt("sr", 48000).let { if (it in SAMPLE_RATES) it else 48000 })
     /** Pin thread audio ke core CPU tercepat (mengurangi beban/xrun di HP big.LITTLE). */
     var bigCore by mutableStateOf(sp.getBoolean("bigCore", true))
     /** Microphone on interface input 2, mixed into the output (and into recordings / videos). */
@@ -152,13 +167,16 @@ class Rig(app: Application) {
         micFx[MicP.PRE] = micFx[MicP.PRE].coerceIn(-50f, 3f)
         micFx.forEachIndexed { i, v -> Engine.nativeSetMicParam(i, v) }
         refreshDevices()
+        if (backend == 1 && asioCompiled) refreshAsio() else if (backend == 1) backend = 0
+        if (vstCompiled) { Engine.nativeVstSetOn(vstOn); Engine.nativeVstSetPosition(vstPos); scanVst(); if (vstPath.isNotEmpty() && java.io.File(vstPath).exists()) loadVst(vstPath, true) }
         if (current >= 0) applyPreset(current) else { for (k in 0 until P.COUNT) setAbs(k, P.defs[k].def, false); edited = false }
         midi.start(); midi.reconnectLast()
         viewModelScope.launch(Dispatchers.Default) {
             val t = FloatArray(19); val st = FloatArray(16); val sa = FloatArray(64); val eq = FloatArray(128)
             var hist = FloatArray(150)
-            var devTick = 0
+            var devTick = 0; var vstTick = 0
             while (true) {
+                if (vstCompiled && ++vstTick >= 12) { vstTick = 0; try { if (vstName.isNotEmpty()) { vstEditor = Engine.nativeVstEditorOpen(); if (Engine.nativeVstTakeDirty()) saveVstState() } } catch (_: Throwable) { } }
                 if (++devTick >= (if (running) 70 else 12)) { devTick = 0; try { refreshDevices() } catch (_: Throwable) { } }
                 val nr = Engine.nativeIsRunning()               // also notices when the device was lost / stopped by the engine
                 if (nr != running) { running = nr; if (!nr) meters = FloatArray(19).also { for (i in intArrayOf(0, 1, 2, 16, 17, 18)) it[i] = -120f } }
@@ -237,25 +255,127 @@ class Rig(app: Application) {
         if (!outDevs.any { it.id == selOut }) selOut = 0
     }
 
+    // ---------- ASIO
+    class AsioInfo(val min: Int, val max: Int, val pref: Int, val gran: Int, val latIn: Int, val latOut: Int, val rates: List<Int>, val inputs: List<String>, val outputs: List<String>) {
+        /** Buffer sizes (frames) this driver accepts, from the usual list; granularity -1 = powers of two, 0 = only the preferred size. */
+        fun bufferChoices(): List<Int> {
+            val c = listOf(16, 32, 48, 64, 96, 128, 192, 256, 384, 512, 768, 1024, 2048).filter { v ->
+                v in min..max && when { gran == 0 -> v == pref; gran < 0 -> v >= min && (v and (v - 1)) == 0; else -> (v - min) % gran == 0 }
+            }
+            return (c + pref).distinct().sorted()
+        }
+    }
+    fun setBackend(b: Int) {
+        if (b == backend) return
+        if (b == 1 && !asioCompiled) { asioMsg = "This build has no ASIO support (see README_WINDOWS.md)."; return }
+        backend = b; sp.edit().putInt("backend", b).apply()
+        if (b == 1) refreshAsio()
+        restartIfRunning()
+    }
+    fun refreshAsio() {
+        viewModelScope.launch(Dispatchers.Default) {
+            val list = Engine.nativeAsioDrivers().mapNotNull { l -> val p = l.indexOf('|'); if (p <= 0) null else Dev(l.substring(0, p).toIntOrNull() ?: return@mapNotNull null, l.substring(p + 1), false) }
+            asioDrivers = list
+            val found = list.firstOrNull { it.name == asioName } ?: list.firstOrNull()
+            if (found == null) { asioMsg = if (asioCompiled) "No ASIO driver is installed. Install your interface's driver (or ASIO4ALL)." else "This build has no ASIO support (see README_WINDOWS.md)."; asioInfo = null; return@launch }
+            asioDrv = found.id; asioName = found.name
+            probeAsio()
+        }
+    }
+    fun pickAsio(d: Dev) {
+        if (running && backend == 1) { asioMsg = "Stop the engine before choosing another ASIO driver."; return }
+        asioDrv = d.id; asioName = d.name; sp.edit().putString("asioName", d.name).apply()
+        probeAsio()
+    }
+    /** Reads the driver's buffer range, sample rates and channel names. Never while the engine plays through another driver. */
+    fun probeAsio() {
+        viewModelScope.launch(Dispatchers.Default) {
+            val r = Engine.nativeAsioProbe(asioDrv).split('|')
+            if (r.firstOrNull() != "OK" || r.size < 10) { asioInfo = null; asioMsg = r.getOrElse(1) { "The ASIO driver did not answer." }; return@launch }
+            val i = AsioInfo(r[1].toInt(), r[2].toInt(), r[3].toInt(), r[4].toInt(), r[5].toInt(), r[6].toInt(),
+                r[7].split(',').mapNotNull { it.toIntOrNull() }, r[8].split('\t').filter { it.isNotEmpty() }, r[9].split('\t').filter { it.isNotEmpty() })
+            asioInfo = i; asioMsg = ""
+            if (asioBuf !in i.bufferChoices()) asioBuf = i.pref
+            if (asioIn !in 0 until maxOf(1, i.inputs.size)) asioIn = 0
+            if (asioOut !in 0 until maxOf(1, i.outputs.size - 1)) asioOut = 0
+            if (i.rates.isNotEmpty() && sampleRate !in i.rates) setSampleRateHz(if (48000 in i.rates) 48000 else i.rates.first())
+        }
+    }
+    fun setAsioBuf(frames: Int) { asioBuf = frames; sp.edit().putInt("asioBuf", frames).apply(); restartIfRunning() }
+    fun setAsioIn(ch: Int) { asioIn = ch; sp.edit().putInt("asioIn", ch).apply(); restartIfRunning() }
+    fun setAsioOut(ch: Int) { asioOut = ch; sp.edit().putInt("asioOut", ch).apply(); restartIfRunning() }
+    fun asioControlPanel() { viewModelScope.launch(Dispatchers.Default) { Engine.nativeAsioControlPanel() } }
+
+    // ---------- VST3 effect slot (one plug-in, saved with the app, not with the preset)
+    class VstEntry(val path: String, val name: String)
+    val vstCompiled: Boolean = Engine.nativeVstCompiled()
+    var vstList by mutableStateOf(listOf<VstEntry>())
+    var vstScanning by mutableStateOf(false)
+    var vstPath by mutableStateOf(sp.getString("vstPath", "") ?: "")
+    var vstName by mutableStateOf("")                                   // "" = nothing loaded
+    var vstOn by mutableStateOf(sp.getBoolean("vstOn", true))
+    var vstPos by mutableIntStateOf(sp.getInt("vstPos", 0))             // 0 after the chain · 1 before the chain
+    var vstDirs by mutableStateOf(sp.getString("vstDirs", "") ?: "")    // extra scan folders, ';' separated
+    var vstMsg by mutableStateOf("")
+    var vstEditor by mutableStateOf(false)
+    var vstLatency by mutableIntStateOf(0)
+    fun scanVst() {
+        if (vstScanning) return
+        vstScanning = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try { vstList = Engine.nativeVstScan(vstDirs).mapNotNull { l -> val p = l.lastIndexOf('|'); if (p <= 0) null else VstEntry(l.substring(0, p), l.substring(p + 1)) } }
+            finally { vstScanning = false }
+        }
+    }
+    fun loadVst(path: String, restoreState: Boolean = false) {
+        viewModelScope.launch(Dispatchers.IO) {
+            vstMsg = "Loading…"
+            val state = if (restoreState || path == vstPath) sp.getString("vstState", "") ?: "" else ""
+            val err = Engine.nativeVstLoad(path)
+            if (err.isNotEmpty()) { vstMsg = err; vstName = ""; return@launch }
+            Engine.nativeVstSetOn(vstOn); Engine.nativeVstSetPosition(vstPos)
+            if (state.isNotEmpty()) Engine.nativeVstSetState(state)
+            vstPath = path; vstName = Engine.nativeVstName(); vstLatency = Engine.nativeVstLatency(); vstMsg = ""
+            sp.edit().putString("vstPath", path).apply()
+            if (path != sp.getString("vstStatePath", "")) sp.edit().putString("vstState", "").putString("vstStatePath", path).apply()
+        }
+    }
+    fun unloadVst() {
+        viewModelScope.launch(Dispatchers.IO) {
+            Engine.nativeVstUnload(); vstName = ""; vstPath = ""; vstEditor = false; vstMsg = ""
+            sp.edit().putString("vstPath", "").putString("vstState", "").apply()
+        }
+    }
+    fun setVstOn(on: Boolean) { vstOn = on; sp.edit().putBoolean("vstOn", on).apply(); Engine.nativeVstSetOn(on) }
+    fun setVstPos(p: Int) { vstPos = p; sp.edit().putInt("vstPos", p).apply(); Engine.nativeVstSetPosition(p) }
+    fun addVstDir(dir: String) { if (dir.isBlank() || dir in vstDirs.split(';')) return; vstDirs = (vstDirs.split(';').filter { it.isNotBlank() } + dir).joinToString(";"); sp.edit().putString("vstDirs", vstDirs).apply(); scanVst() }
+    fun openVstEditor() { viewModelScope.launch(Dispatchers.IO) { if (!Engine.nativeVstOpenEditor()) vstMsg = "This plug-in has no editor window." else vstMsg = ""; vstEditor = Engine.nativeVstEditorOpen() } }
+    fun closeVstEditor() { viewModelScope.launch(Dispatchers.IO) { Engine.nativeVstCloseEditor(); vstEditor = false } }
+    private fun saveVstState() { val st = Engine.nativeVstGetState(); if (st.isNotEmpty()) sp.edit().putString("vstState", st).putString("vstStatePath", vstPath).apply() }
+
     fun togglePower() {
         viewModelScope.launch(Dispatchers.Default) {
             if (running) {
                 Engine.nativeStop(); running = false; status = ""
                 meters = FloatArray(19).also { for (i in intArrayOf(0, 1, 2, 16, 17, 18)) it[i] = -120f }
             } else {
-                running = Engine.nativeStart(selIn, selOut, latMode, bufMs, sampleRate, micDevArg())
+                running = startAudio()
                 status = if (running) "" else "Could not open audio: " + Engine.nativeLastError().ifBlank { "check the audio interface, or close other programs that use it exclusively." }
             }
         }
     }
-    fun restartIfRunning() { if (running) viewModelScope.launch(Dispatchers.Default) { running = Engine.nativeStart(selIn, selOut, latMode, bufMs, sampleRate, micDevArg()) } }
+    /** Opens the selected backend (ASIO driver or Windows audio) with the current settings. */
+    private fun startAudio(): Boolean =
+        if (backend == 1) Engine.nativeStartAsio(asioDrv, sampleRate, asioBuf, asioIn, asioOut)
+        else Engine.nativeStart(selIn, selOut, latMode, bufMs, sampleRate, micDevArg())
+    fun restartIfRunning() { if (running) viewModelScope.launch(Dispatchers.Default) { running = startAudio(); if (!running) status = "Could not open audio: " + Engine.nativeLastError() } }
     fun updateLatMode(m: Int) { latMode = m; sp.edit().putInt("latMode", m).apply(); restartIfRunning() }
     fun setBuf(ms: Float) {
         bufMs = ms; sp.edit().putFloat("bufMs", ms).apply()
         Engine.nativeSetBufferMs(ms); restartIfRunning()      // the buffer size is applied when the device is (re)opened
     }
     fun setSampleRateHz(hz: Int) {
-        val v = if (hz == 44100) 44100 else 48000
+        val v = if (hz in SAMPLE_RATES) hz else 48000
         if (v == sampleRate) return
         sampleRate = v; sp.edit().putInt("sr", v).apply(); restartIfRunning()
         viewModelScope.launch(Dispatchers.IO) { val e = edited; cabName?.let { loadIrFile(it, 0) }; cab2Name?.let { loadIrFile(it, 1) }; edited = e }   // IRs are resampled to the engine rate
@@ -308,7 +428,7 @@ class Rig(app: Application) {
     fun chooseBus(db: Float) { busDb = db; sp.edit().putFloat("busDb", db).apply(); Engine.nativeSetBus(db) }
     fun setMicLevel(db: Float) { micDb = db; sp.edit().putFloat("micDb", db).apply(); Engine.nativeSetMic(micOn, db) }
     fun setBigCoreOn(on: Boolean) { bigCore = on; sp.edit().putBoolean("bigCore", on).apply(); Engine.nativeSetBigCore(on) }
-    fun shutdown() { Engine.nativeStop(); midi.stop(); viewModelScope.cancel() }   // called when the window closes
+    fun shutdown() { try { if (vstName.isNotEmpty()) saveVstState(); Engine.nativeVstUnload() } catch (_: Throwable) { }; Engine.nativeStop(); midi.stop(); viewModelScope.cancel() }   // called when the window closes
 
     // ---------- file import (NAM model / cabinet IR)
     fun importNam(src: File) {

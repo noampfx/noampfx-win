@@ -33,6 +33,7 @@ fun NoAmpApp(rig: Rig, onPower: () -> Unit) {
     var tab by remember { mutableStateOf(Tab.DASH) }
     var stage by remember { mutableStateOf(false) }
     var settings by remember { mutableStateOf(false) }
+    var settingsPage by remember { mutableStateOf(0) }
     var tool by remember { mutableStateOf(0) }       // page of the home screen: 0 = pedal controller, 1 metronome, 2 record, 3 player, 4 looper, 6 mixer
     var pitchMode by remember { mutableStateOf(0) } // 0 = Pitch Shifter, 1 = Octave, 2 = Harmony
     // bank 0 = original block, 1..2 = extra (duplicate) block: the module screen then edits that bank's parameters
@@ -50,9 +51,10 @@ fun NoAmpApp(rig: Rig, onPower: () -> Unit) {
     Box(Modifier.fillMaxSize().background(C.Bg)) {
         when {
             stage -> StageScreen(rig, onPower) { stage = false }
-            settings -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) { Box(Modifier.widthIn(max = 900.dp).fillMaxSize()) { SettingsScreen(rig, onPower) { settings = false } } }
+            settings -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) { Box(Modifier.widthIn(max = 900.dp).fillMaxSize()) { SettingsScreen(rig, onPower, settingsPage) { settings = false } } }
             else -> Row(Modifier.fillMaxSize()) {
-                Sidebar(rig, tab, tool, onPower, onStage = { stage = true }, onSettings = { settings = true },
+                Sidebar(rig, tab, tool, onPower, onStage = { stage = true }, onSettings = { settingsPage = 0; settings = true },
+                    onVst = { if (rig.vstName.isNotEmpty()) rig.openVstEditor() else { settingsPage = 2; settings = true } },
                     onModule = { t -> openTab(t, 0); tool = 0 },
                     onTool = { i -> rig.uiBank = 0; tool = if (tab == Tab.DASH && tool == i) 0 else i; tab = Tab.DASH },
                     onHome = home)
@@ -89,7 +91,7 @@ fun NoAmpApp(rig: Rig, onPower: () -> Unit) {
 }
 
 @Composable
-private fun Sidebar(rig: Rig, tab: Tab, tool: Int, onPower: () -> Unit, onStage: () -> Unit, onSettings: () -> Unit, onModule: (Tab) -> Unit, onTool: (Int) -> Unit, onHome: () -> Unit) {
+private fun Sidebar(rig: Rig, tab: Tab, tool: Int, onPower: () -> Unit, onStage: () -> Unit, onSettings: () -> Unit, onVst: () -> Unit, onModule: (Tab) -> Unit, onTool: (Int) -> Unit, onHome: () -> Unit) {
     Column(Modifier.width(208.dp).fillMaxHeight().background(C.Panel)) {
         Image(asset("logo_banner.png"), contentDescription = "NoAmp FX", modifier = Modifier.fillMaxWidth().height(54.dp).padding(horizontal = 12.dp, vertical = 6.dp).clickable { onHome() }, contentScale = ContentScale.Fit, alignment = Alignment.CenterStart)
         // ---- engine
@@ -128,6 +130,7 @@ private fun Sidebar(rig: Rig, tab: Tab, tool: Int, onPower: () -> Unit, onStage:
         Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             NavItem("Tuner", C.Violet, rig.tunerOn, null) { rig.setTuner(!rig.tunerOn) }
             NavItem("Stage mode", C.Green, false, null) { onStage() }
+            if (rig.vstCompiled) NavItem(if (rig.vstName.isEmpty()) "VST3 plug-in" else rig.vstName, C.Pink, rig.vstEditor, if (rig.vstName.isEmpty()) null else rig.vstOn) { onVst() }
             NavItem("Settings", Color.White, false, null) { onSettings() }
             Text("Ctrl+←/→ presets · Ctrl+E engine · Ctrl+T tuner · Esc back · F11 full screen", color = C.Off, fontSize = 9.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
         }

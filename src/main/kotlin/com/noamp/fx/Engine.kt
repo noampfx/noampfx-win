@@ -51,6 +51,32 @@ object Engine {
     /** Decodes up to [limitSec] seconds into the player. Returns the decoded seconds, or < 0 on failure / cancel. */
     external fun nativeDecodeFile(path: String, limitSec: Int, keep: Boolean): Double
     external fun nativeSetDecodeCancel(c: Boolean)
+    // ASIO (needs the ASIO SDK at build time) ---------------------------------------------------------------
+    external fun nativeAsioCompiled(): Boolean
+    /** Entries "index|driver name". */
+    external fun nativeAsioDrivers(): Array<String>
+    /** "OK|min|max|preferred|granularity|latencyIn|latencyOut|rates(csv)|inputs(tab)|outputs(tab)" or "ERR|reason". */
+    external fun nativeAsioProbe(driver: Int): String
+    external fun nativeStartAsio(driver: Int, sampleRate: Int, bufFrames: Int, firstIn: Int, firstOut: Int): Boolean
+    external fun nativeAsioControlPanel()
+    // VST3 slot (needs the VST3 SDK at build time) ------------------------------------------------------------
+    external fun nativeVstCompiled(): Boolean
+    /** Entries "path|name" for every .vst3 in the standard folders plus [extraDirs] (';' separated). */
+    external fun nativeVstScan(extraDirs: String): Array<String>
+    /** "" = loaded, otherwise the error text. */
+    external fun nativeVstLoad(path: String): String
+    external fun nativeVstUnload()
+    external fun nativeVstName(): String
+    external fun nativeVstLatency(): Int
+    external fun nativeVstSetOn(on: Boolean)
+    /** 0 = after the chain (stereo) · 1 = before the chain (mono guitar signal). */
+    external fun nativeVstSetPosition(pos: Int)
+    external fun nativeVstOpenEditor(): Boolean
+    external fun nativeVstCloseEditor()
+    external fun nativeVstEditorOpen(): Boolean
+    external fun nativeVstGetState(): String
+    external fun nativeVstSetState(state: String): Boolean
+    external fun nativeVstTakeDirty(): Boolean
     // looper / metronome / recorder
     external fun nativeLooperCmd(c: Int)
     external fun nativeLooperLevel(db: Float)
