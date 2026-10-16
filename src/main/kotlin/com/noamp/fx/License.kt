@@ -17,7 +17,7 @@ import java.util.UUID
  */
 object License {
     // Filled in automatically by:  python tools/license_tool.py init   (or paste the public key of your Android License.kt)
-    private const val PUBLIC_KEY_B64 = "REPLACE_WITH_PUBLIC_KEY"
+    private const val PUBLIC_KEY_B64 = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEpffSBT9huBMurBcZ18hE+aKY2MAauAkRlk15O82yMeeVUPqmGhVBQgW90pKhamKR/RgxutQ8tMuHRe35maW3Rw=="
 
     private const val PREFS = "lic"
     private const val PAYLOAD_PREFIX = "NOAMPFX1|"
