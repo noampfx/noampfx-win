@@ -80,6 +80,24 @@ class Rig(app: Application) {
     var asioMsg by mutableStateOf("")                         // probe error / hint shown in Settings
     var asioBuf by mutableIntStateOf(sp.getInt("asioBuf", 0)) // frames, 0 = driver default
     var asioIn by mutableIntStateOf(sp.getInt("asioIn", 0)); var asioOut by mutableIntStateOf(sp.getInt("asioOut", 0))
+<<<<<<< HEAD
+
+    // ---------- VST3 effect slot state (functions further below)
+    class VstEntry(val path: String, val name: String)
+    val vstCompiled: Boolean = Engine.nativeVstCompiled()
+    var vstList by mutableStateOf(listOf<VstEntry>())
+    var vstScanning by mutableStateOf(false)
+    var vstPath by mutableStateOf(sp.getString("vstPath", "") ?: "")
+    var vstName by mutableStateOf("")                                   // "" = nothing loaded
+    var vstOn by mutableStateOf(sp.getBoolean("vstOn", true))
+    var vstPos by mutableIntStateOf(sp.getInt("vstPos", 0))             // 0 after the chain · 1 before the chain
+    var vstDirs by mutableStateOf(sp.getString("vstDirs", "") ?: "")    // extra scan folders, ';' separated
+    var vstMsg by mutableStateOf("")
+    var vstEditor by mutableStateOf(false)
+    var vstLatency by mutableIntStateOf(0)
+
+=======
+>>>>>>> 3b85ec94717db41ca74122c33b71ed0045531008
     /** 0 Ultra (exclusive) · 1 Low (shared) · 2 Balanced · 3 Safe (power saving) */
     var latMode by mutableIntStateOf(sp.getInt("latMode", 0))
     /** Buffer dalam ms; 0 = Auto */
@@ -307,6 +325,8 @@ class Rig(app: Application) {
     fun asioControlPanel() { viewModelScope.launch(Dispatchers.Default) { Engine.nativeAsioControlPanel() } }
 
     // ---------- VST3 effect slot (one plug-in, saved with the app, not with the preset)
+<<<<<<< HEAD
+=======
     class VstEntry(val path: String, val name: String)
     val vstCompiled: Boolean = Engine.nativeVstCompiled()
     var vstList by mutableStateOf(listOf<VstEntry>())
@@ -319,6 +339,7 @@ class Rig(app: Application) {
     var vstMsg by mutableStateOf("")
     var vstEditor by mutableStateOf(false)
     var vstLatency by mutableIntStateOf(0)
+>>>>>>> 3b85ec94717db41ca74122c33b71ed0045531008
     fun scanVst() {
         if (vstScanning) return
         vstScanning = true
